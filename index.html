@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ระบบบันทึกประวัติผู้ป่วยและการรักษา</title>
+    <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-auth-compat.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        h1, h2 {
+            color: #333;
+        }
+        input, textarea, button {
+            margin: 10px 0;
+            padding: 10px;
+            width: 100%;
+        }
+        button {
+            background-color: #4CAF50;
+            border: none;
+            color: white;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+        .tab-content {
+            display: none;
+        }
+        .active {
+            display: block;
+        }
+        #bodyChartContainer {
+            position: relative;
+            width: 300px;
+            height: 400px;
+            margin: 20px auto;
+        }
+        #bodyChartImage, #drawingCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>ระบบบันทึกประวัติผู้ป่วยและการรักษา</h1>
+        
+        <div id="tabs">
+            <button onclick="showTab('patientTab')">ข้อมูลผู้ป่วย</button>
+            <button onclick="showTab('treatmentTab')">บันทึกการรักษา</button>
+        </div>
+
+        <div id="patientTab" class="tab-content active">
+            <h2>บันทึกข้อมูลผู้ป่วย</h2>
+            <form id="patientForm">
+                <input type="text" id="patientName" placeholder="ชื่อ-นามสกุล" required>
+                <input type="date" id="patientDOB" required>
+                <input type="tel" id="patientPhone" placeholder="เบอร์โทรศัพท์" required>
+                <button type="submit">บันทึกข้อมูล</button>
+            </form>
+
+            <h2>รายชื่อผู้ป่วย</h2>
+            <table id="patientList">
+                <tr>
+                    <th>HN</th>
+                    <th>ชื่อ-นามสกุล</th>
+                    <th>วันเกิด</th>
+                    <th>เบอร์โทรศัพท์</th>
+                    <th>การดำเนินการ</th>
+                </tr>
+            </table>
+        </div>
+
+        <div id="treatmentTab" class="tab-content">
+            <h2>บันทึกการรักษา</h2>
+            <div id="selectedPatientInfo" class="patient-info-box"></div>
+            <div id="searchResults"></div>
+
+            <h3>Vital Signs</h3>
+            <form id="vitalSignsForm">
+                <input type="number" id="temperature" placeholder="อุณหภูมิ (°C)" step="0.1">
+                <input type="number" id="heartRate" placeholder="อัตราการเต้นของหัวใจ (ครั้ง/นาที)">
+                <input type="number" id="bloodPressureSystolic" placeholder="ความดันโลหิตตัวบน (mmHg)">
+                <input type="number" id="bloodPressureDiastolic" placeholder="ความดันโลหิตตัวล่าง (mmHg)">
+                <input type="number" id="respiratoryRate" placeholder="อัตราการหายใจ (ครั้ง/นาที)">
+            </form>
+
+            <div id="bodyChartContainer">
+                <img src="https://st5.depositphotos.com/6464944/64924/v/1600/depositphotos_649242858-stock-illustration-human-male-body-anatomy-featuring.jpg" id="bodyChartImage">
+                <canvas id="drawingCanvas"></canvas>
+            </div>
+            <button onclick="clearDrawing()">ล้างรูปวาด</button>
+
+            <form id="treatmentForm">
+                <textarea id="treatmentNotes" placeholder="บันทึกการรักษา"></textarea>
+                <button type="submit">บันทึกการรักษา</button>
+            </form>
+
+            <h2>ประวัติการรักษา</h2>
+            <table id="treatmentHistory">
+                <tr>
+                    <th>วันที่</th>
+                    <th>อาการ</th>
+                    <th>การวินิจฉัย</th>
+                    <th>การรักษา</th>
+                    <th>การดำเนินการ</th>
+                </tr>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        // Firebase configuration
+        const firebaseConfig = {
+            apiKey: "AIzaSyCEqQzLWOUt0VtL0cnJlirI3eU84bhN9Js",
+            authDomain: "houseofherb-web-record.firebaseapp.com",
+            projectId: "houseofherb-web-record",
+            storageBucket: "houseofherb-web-record.appspot.com",
+            messagingSenderId: "18478356049",
+            appId: "1:18478356049:web:1b324644a6b02461be4a70"
+        };
+
+        // Initialize Firebase
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
+
+        let currentPatientId = null;
+        let isDrawing = false;
+        let lastX = 0;
+        let lastY = 0;
+
+        function showTab(tabName) {
+            document.querySelectorAll('.tab-content').forEach(tab => tab.style.display = 'none');
+            document.getElementById(tabName).style.display = 'block';
+        }
+
+        // Patient management
+        document.getElementById('patientForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            const name = document.getElementById('patientName').value;
+            const dob = document.getElementById('patientDOB').value;
+            const phone = document.getElementById('patientPhone').value;
+
+            db.collection('patients').add({
+                name: name,
+                dob: dob,
+                phone: phone
+            })
+            .then(() => {
+                console.log("Patient added successfully");
+                loadPatients();
+                document.getElementById('patientForm').reset();
+            })
+            .catch((error) => {
+                console.error("Error adding patient: ", error);
+            });
+        });
+
+        function loadPatients() {
+            const patientList = document.getElementById('patientList');
+            patientList.innerHTML = '<tr><th>HN</th><th>ชื่อ-นามสกุล</th><th>วันเกิด</th><th>เบอร์โทรศัพท์</th><th>การดำเนินการ</th></tr>';
+
+            db.collection('patients').get().then((querySnapshot) => {
+                querySnapshot.forEach((doc) => {
+                    const patient = doc.data();
+                    const row = patientList.insertRow(-1);
+                    row.insertCell(0).textContent = doc.id;
+                    row.insertCell(1).textContent = patient.name;
+                    row.insertCell(2).textContent = patient.dob;
+                    row.insertCell(3).textContent = patient.phone;
+                    const actionCell = row.insertCell(4);
+                    actionCell.innerHTML = `<button onclick="selectPatient('${doc.id}')">เลือก</button>`;
+                });
+            });
+        }
+
+        function selectPatient(patientId) {
+            currentPatientId = patientId;
+            db.collection('patients').doc(patientId).get().then((doc) => {
+                if (doc.exists) {
+                    const patient = doc.data();
+                    document.getElementById('selectedPatientInfo').innerHTML = `
+                        <h3>ข้อมูลผู้ป่วย</h3>
+                        <p>HN: ${doc.id}</p>
+                        <p>ชื่อ-นามสกุล: ${patient.name}</p>
+                        <p>วันเกิด: ${patient.dob}</p>
+                        <p>เบอร์โทรศัพท์: ${patient.phone}</p>
+                    `;
+                    showTab('treatmentTab');
+                    loadTreatmentHistory(patientId);
+                } else {
+                    console.log("No such patient!");
+                }
+            }).catch((error) => {
+                console.log("Error getting patient:", error);
+            });
+        }
+
+        // Treatment management
+        document.getElementById('treatmentForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            if (!currentPatientId) {
+                alert('กรุณาเลือกผู้ป่วยก่อนบันทึกการรักษา');
+                return;
+            }
+
+            const treatmentNotes = document.getElementById('treatmentNotes').value;
+            const temperature = document.getElementById('temperature').value;
+            const heartRate = document.getElementById('heartRate').value;
+            const bloodPressureSystolic = document.getElementById('bloodPressureSystolic').value;
+            const bloodPressureDiastolic = document.getElementById('bloodPressureDiastolic').value;
+            const respiratoryRate = document.getElementById('respiratoryRate').value;
+
+            const canvas = document.getElementById('drawingCanvas');
+            const bodyChartImage = canvas.toDataURL();
+
+            db.collection('treatments').add({
+                patientId: currentPatientId,
+                date: new Date(),
+                notes: treatmentNotes,
+                vitalSigns: {
+                    temperature: temperature,
+                    heartRate: heartRate,
+                    bloodPressure: `${bloodPressureSystolic}/${bloodPressureDiastolic}`,
+                    respiratoryRate: respiratoryRate
+                },
+                bodyChartImage: bodyChartImage
+            })
+            .then(() => {
+                console.log("Treatment recorded successfully");
+                loadTreatmentHistory(currentPatientId);
+                document.getElementById('treatmentForm').reset();
+                clearDrawing();
+            })
+            .catch((error) => {
+                console.error("Error recording treatment: ", error);
+            });
+        });
+
+        function loadTreatmentHistory(patientId) {
+            const treatmentHistory = document.getElementById('treatmentHistory');
+            treatmentHistory.innerHTML = '<tr><th>วันที่</th><th>อาการ</th><th>การวินิจฉัย</th><th>การรักษา</th><th>การดำเนินการ</th></tr>';
+
+            db.collection('treatments')
+                .where('patientId', '==', patientId)
+                .orderBy('date', 'desc')
+                .get()
+                .then((querySnapshot) => {
+                    querySnapshot.forEach((doc) => {
+                        const treatment = doc.data();
+                        const row = treatmentHistory.insertRow(-1);
+                        row.insertCell(0).textContent = treatment.date.toDate().toLocaleString();
+                        row.insertCell(1).textContent = '-'; // อาการ (ไม่ได้เก็บในฐานข้อมูล)
+                        row.insertCell(2).textContent = '-'; // การวินิจฉัย (ไม่ได้เก็บในฐานข้อมูล)
+                        row.insertCell(3).textContent = treatment.notes;
+                        const actionCell = row.insertCell(4);
+                        actionCell.innerHTML = `<button onclick="viewTreatmentDetails('${doc.id}')">ดูรายละเอียด</button>`;
+                    });
+                });
+        }
+
+        function viewTreatmentDetails(treatmentId) {
+            db.collection('treatments').doc(treatmentId).get().then((doc) => {
+                if (doc.exists) {
+                    const treatment = doc.data();
+                    alert(`
+                        วันที่: ${treatment.date.toDate().toLocaleString()}
+                        บันทึกการรักษา: ${treatment.notes}
+                        Vital Signs:
+                        - อุณหภูมิ: ${treatment.vitalSigns.temperature} °C
+                        - อัตราการเต้นของหัวใจ: ${treatment.vitalSigns.heartRate} ครั้ง/นาที
+                        - ความดันโลหิต: ${treatment.vitalSigns.bloodPressure} mmHg
+                        - อัตราการหายใจ: ${treatment.vitalSigns.respiratoryRate} ครั้ง/นาที
+                    `);
+                    // แสดงรูปภาพ body chart ถ้าต้องการ
+                } else {
+                    console.log("No such treatment!");
+                }
+            }).catch((error) => {
+                console.log("Error getting treatment:", error);
+            });
+        }
+
+        // Drawing on body chart
+        const canvas = document.getElementById('drawingCanvas');
+        const ctx = canvas.getContext('2d');
+
+        canvas.width = 300;
+        canvas.height = 400;
+
+        canvas.addEventListener('mousedown', startDrawing);
+        canvas.addEventListener('mousemove', draw);
+        canvas.addEventListener('mouseup', stopDrawing);
+        canvas.addEventListener('mouseout', stopDrawing);
+
+        canvas.addEventListener('touchstart', startDrawing);
+        canvas.addEventListener('touchmove', draw);
+        canvas.addEventListener('touchend', stopDrawing);
+
+        function startDrawing(e) {
+            isDrawing = true;
+            [lastX, lastY] = [e.offsetX, e.offsetY];
+        }
+
+        function draw(e) {
+            if (!isDrawing) return;
+            e.preventDefault();
+            
+            let currentX, currentY;
+            if (e.type === 'mousemove') {
+                currentX = e.offsetX;
+                currentY = e.offsetY;
+            } else if (e.type === 'touchmove') {
+                const rect = canvas.getBoundingClientRect();
+                currentX = e.touches[0].clientX - rect.left;
+                currentY = e.touches[0].clientY - rect.top;
+            }
+
+            ctx.beginPath();
+            ctx.moveTo(lastX, lastY);
+            ctx.lineTo(currentX, currentY);
+            ctx.stroke();
+
+            [lastX, lastY] = [currentX, currentY];
+        }
+
+        function stopDrawing() {
+            isDrawing = false;
+        }
+
+        function clearDrawing() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }
+
+        // Initial load
+        loadPatients();
+
+        // Authentication (you can implement this part based on your needs)
+        function initAuth() {
+            firebase.auth().onAuthStateChanged(function(user) {
+                if (user) {
+                    // User is signed in.
+                    console.log("User is signed in:", user.email);
+                } else {
+                    // No user is signed in.
+                    console.log("No user signed in");
+                    // Redirect to login page or show login form
+                }
+            });
+        }
+
+        function login(email, password) {
+            firebase.auth().signInWithEmailAndPassword(email, password)
+                .then((userCredential) => {
+                    // Signed in 
+                    var user = userCredential.user;
+                    console.log("Logged in successfully");
+                })
+                .catch((error) => {
+                    var errorCode = error.code;
+                    var errorMessage = error.message;
+                    console.error("Login error:", errorMessage);
+                });
+        }
+
+        function logout() {
+            firebase.auth().signOut().then(() => {
+                // Sign-out successful.
+                console.log("Signed out successfully");
+            }).catch((error) => {
+                // An error happened.
+                console.error("Logout error:", error);
+            });
+        }
+
+        // Call initAuth when the page loads
+        initAuth();
+    </script>
+</body>
+</html>
